@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: airbnb_datawarehouse
+    schema: raw
+    tables:
+      - name: listings
+        identifier: listings
+      - name: hosts
+        identifier: hosts
+      - name: reviews
+        identifier: reviews
+        loaded_at_field: date::timestamp
+        freshness:
+          warn_after: {count: 1, period: hour}
+          error_after: {count: 24, period: hour}
