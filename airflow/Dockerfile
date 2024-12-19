@@ -1,44 +1,25 @@
-FROM apache/airflow:2.10.2
+FROM apache/airflow:2.9.2-python3.12
 
 USER root
-# Install necessary packages including PostgreSQL development files
-RUN apt-get update && \
-    apt-get install -y \
-    gcc \
-    g++ \
-    make \
-    gosu \
-    libpq-dev \
+RUN apt-get update -y \
+    && apt-get install -y git \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create directory for PostgreSQL data
-RUN mkdir -p /var/lib/postgresql/data && \
-    chown -R 999:999 /var/lib/postgresql/data && \
-    chmod -R 750 /var/lib/postgresql/data
-
-# Switch back to airflow user for remaining operations
-USER airflow
-
-# Set the working directory
+# Set working directory
 WORKDIR /opt/airflow
 
-# Install all Python packages in a single RUN command to reduce layers
-RUN pip install --no-cache-dir \
-    psycopg2-binary==2.9.9 \
-    apache-airflow==2.10.2 \
-    "apache-airflow[statsd]" \
-    apache-airflow-providers-postgres \
-    python-dotenv \
-    numpy==1.26.4 \
-    pandas \
-    tqdm \
-    dbt-core \
-    dbt-postgres \
-    "astronomer-cosmos>=1.0.3" \
-    apache-airflow-providers-docker==2.1.0
+# Copy requirements files individually with explicit paths
+COPY ./requirements.txt /opt/airflow/requirements.txt
+COPY ./requirements_dbt_venv.txt /opt/airflow/requirements_dbt_venv.txt
 
-# Copy the entire project directory into the container
-COPY --chown=airflow:root . .
+USER airflow
+RUN pip install --no-cache-dir -r /opt/airflow/requirements.txt
 
-# Set the PYTHONPATH environment variable to include the project root
-ENV PYTHONPATH="${PYTHONPATH}:/opt/airflow"
+USER root
+RUN python -m venv dbt_venv && \
+    . dbt_venv/bin/activate && \
+    pip install --no-cache-dir --no-user -r /opt/airflow/requirements_dbt_venv.txt && \
+    deactivate
+
+USER airflow
