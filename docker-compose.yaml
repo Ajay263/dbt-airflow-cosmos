@@ -1,3 +1,5 @@
+version: '3'
+
 services:
   datawarehouse:
     image: postgres:13
@@ -28,3 +30,24 @@ services:
     restart: unless-stopped
     depends_on:
       - datawarehouse
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: dw_metabase
+    ports:
+      - "3000:3000"
+    volumes:
+      - metabase_data:/metabase
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=${DW_DATABASE_NAME}
+      - MB_DB_PORT=5432
+      - MB_DB_USER=${DW_POSTGRES_USER}
+      - MB_DB_PASS=${DW_POSTGRES_PASSWORD}
+      - MB_DB_HOST=datawarehouse
+    depends_on:
+      - datawarehouse
+    restart: unless-stopped
+
+volumes:
+  metabase_data:
