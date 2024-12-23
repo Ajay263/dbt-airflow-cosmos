@@ -3,7 +3,7 @@ WITH raw_hosts AS (
  *
  FROM
 
- {{ source('airbnb_datawarehouse', 'hosts') }}
+ {{ source('airflow', 'hosts') }}
  
 )
 SELECT

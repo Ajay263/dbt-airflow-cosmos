@@ -1,26 +1,39 @@
-version: "2.9.2"
+version: "3.8"
 
 x-common: &common
   build:
-    context: ./airflow  
+    context: ./airflow
     dockerfile: Dockerfile
   user: "${AIRFLOW_UID}:0"
   env_file:
     - .env
   volumes:
-    - ./dags:/opt/airflow/dags
-    - ./logs:/opt/airflow/logs
-    - ./plugins:/opt/airflow/plugins
-    - ./dbt/datawarehouse:/opt/airflow/dbt/datawarehouse
-    - ./dbt/docs:/opt/airflow/docs
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/dbt/datawarehouse:/opt/airflow/dbt/datawarehouse
+    - ./airflow/dbt/dbt-docs:${AIRFLOW__COSMOS__DBT_DOCS_DIR}
     - ~/.ssh:/root/.ssh
     - /var/run/docker.sock:/var/run/docker.sock
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=${AIRFLOW__CORE__EXECUTOR}
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+    - AIRFLOW__CELERY__BROKER_URL=${AIRFLOW__CELERY__BROKER_URL}
+    - AIRFLOW__CELERY__RESULT_BACKEND=${AIRFLOW__CELERY__RESULT_BACKEND}
+    - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW__CORE__FERNET_KEY}
+    - AIRFLOW__CORE__LOAD_EXAMPLES=${AIRFLOW__CORE__LOAD_EXAMPLES}
+    - AIRFLOW__CORE__TEST_CONNECTION=${AIRFLOW__CORE__TEST_CONNECTION}
+    - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=${AIRFLOW__WEBSERVER__EXPOSE_CONFIG}
+    - AIRFLOW__CORE__PARALLELISM=${AIRFLOW__CORE__PARALLELISM}
+    - AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG=${AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG}
+    - AIRFLOW__CELERY__WORKER_CONCURRENCY=${AIRFLOW__CELERY__WORKER_CONCURRENCY}
+    - ENVIRONMENT=${ENVIRONMENT}
   networks:
-    - airflow-network
+    - frontend
 
 x-depends-on: &depends-on
   depends_on:
-    airflow-postgres:
+    postgres:
       condition: service_healthy
     redis:
       condition: service_started
@@ -28,28 +41,40 @@ x-depends-on: &depends-on
       condition: service_completed_successfully
 
 services:
-  # Data Warehouse and Analytics Services
   postgres:
-    image: postgres:13
-    container_name: dw_postgres
-    environment:
-      - POSTGRES_USER=${DW_POSTGRES_USER}
-      - POSTGRES_PASSWORD=${DW_POSTGRES_PASSWORD}
-      - POSTGRES_DB=${DW_DATABASE_NAME}
-    volumes:
-      - "./dw_postgres_data:/var/lib/postgresql/data:rw"
-    ports:
-      - "5432:5432"
+    image: postgres:16
+    container_name: postgres
     restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5434:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DW_POSTGRES_USER} -d ${DW_DATABASE_NAME}"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 5s
       retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     networks:
-      - airflow-network
+      - frontend
 
-  pgadmin-management:
+  postgres_dw:
+    image: postgres:13
+    container_name: postgres_dw
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_dw_data:/var/lib/postgresql/data
+    networks:
+      - frontend
+
+  pgadmin:
     image: dpage/pgadmin4
     container_name: dw_pgadmin
     environment:
@@ -59,9 +84,9 @@ services:
       - "5050:80"
     restart: unless-stopped
     depends_on:
-      - datawarehouse
+      - postgres_dw
     networks:
-      - airflow-network
+      - frontend
 
   metabase:
     image: metabase/metabase:latest
@@ -72,16 +97,16 @@ services:
       - metabase_data:/metabase
     environment:
       - MB_DB_TYPE=postgres
-      - MB_DB_DBNAME=${DW_DATABASE_NAME}
+      - MB_DB_DBNAME=${POSTGRES_DB}
       - MB_DB_PORT=5432
-      - MB_DB_USER=${DW_POSTGRES_USER}
-      - MB_DB_PASS=${DW_POSTGRES_PASSWORD}
-      - MB_DB_HOST=datawarehouse
+      - MB_DB_USER=${POSTGRES_USER}
+      - MB_DB_PASS=${POSTGRES_PASSWORD}
+      - MB_DB_HOST=postgres_dw
     depends_on:
-      - datawarehouse
+      - postgres_dw
     restart: unless-stopped
     networks:
-      - airflow-network
+      - frontend
 
   redis:
     image: redis:latest
@@ -89,16 +114,28 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 30s
+      retries: 5
     networks:
-      - airflow-network
+      - frontend
 
   flower:
     <<: [*common, *depends-on]
     container_name: airflow-flower
     restart: unless-stopped
     command: celery flower
+    environment:
+      - FLOWER_BASIC_AUTH=${FLOWER_BASIC_AUTH}
     ports:
       - "5555:5555"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
 
   scheduler:
     <<: [*common, *depends-on]
@@ -107,12 +144,19 @@ services:
     restart: unless-stopped
     ports:
       - "8793:8793"
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
 
   webserver:
     <<: [*common, *depends-on]
     container_name: airflow-webserver
     restart: unless-stopped
     command: webserver
+    environment:
+      - AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT=${AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT}
     ports:
       - "8080:8080"
     healthcheck:
@@ -125,14 +169,24 @@ services:
     <<: [*common, *depends-on]
     container_name: airflow-worker
     restart: unless-stopped
-    command:
-      - celery
-      - worker
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || exit 1'
+      interval: 30s
+      timeout: 30s
+      retries: 5
 
   airflow-init:
     <<: *common
     container_name: airflow-init
     entrypoint: /bin/bash
+    environment:
+      - _AIRFLOW_DB_MIGRATE=${_AIRFLOW_DB_MIGRATE}
+      - _AIRFLOW_WWW_USER_CREATE=${_AIRFLOW_WWW_USER_CREATE}
+      - _AIRFLOW_WWW_USER_USERNAME=${_AIRFLOW_WWW_USER_USERNAME}
+      - _AIRFLOW_WWW_USER_PASSWORD=${_AIRFLOW_WWW_USER_PASSWORD}
     command:
       - -c
       - |
@@ -140,10 +194,11 @@ services:
         chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
         exec /entrypoint airflow version
 
-networks:
-  airflow-network:
-
 volumes:
-  dw_postgres_data:
+  postgres_data:
+  postgres_dw_data:
   metabase_data:
-  airflow_postgres_data:
+
+networks:
+  frontend:
+    name: airflow_network

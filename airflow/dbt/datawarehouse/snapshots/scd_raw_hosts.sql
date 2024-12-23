@@ -8,5 +8,5 @@
  invalidate_hard_deletes=True
  )
 }}
-select * FROM {{ source('airbnb_datawarehouse', 'hosts') }}
+select * FROM {{ source('airflow', 'hosts') }}
 {% endsnapshot %}

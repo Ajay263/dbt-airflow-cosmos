@@ -10,7 +10,7 @@
    )
 }}
 
-select * FROM {{ source('airbnb_datawarehouse', 'listings') }}
+select * FROM {{ source('airflow', 'listings') }}
 
 {% endsnapshot %}
 

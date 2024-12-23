@@ -7,21 +7,22 @@ from cosmos import DbtTaskGroup, ProjectConfig, ExecutionConfig, ProfileConfig, 
 from cosmos.profiles import PostgresUserPasswordProfileMapping
 from cosmos.constants import LoadMode, TestBehavior
 
-# Profile configuration for connecting to the database
+
 profile_config = ProfileConfig(
     profile_name="default",
     target_name="dev",
     profile_mapping=PostgresUserPasswordProfileMapping(
-        conn_id="airbnb_datawarehouse",
-        profile_args={"schema": "dev"},
+        conn_id="airflow_db",
+        profile_args={"schema": "public"},
     ),
 )
 
-dbt_project_path = f"{os.environ['AIRFLOW_HOME']}/dbt/jaffle_shop"
+dbt_project_path=f"{os.environ['AIRFLOW_HOME']}/dbt/datawarehouse"
+
 
 default_args = {
     "owner": "airflow",
-    'retries': 3,
+    'retries': 1,
     'retry_delay': pendulum.duration(minutes=5),
     'params': {
         'start_time': Param(None, type=["null", "string"], format="date", description="Start date for run", title="Start date"),
@@ -40,17 +41,15 @@ default_args = {
 )
 def dbt_simple_task_group() -> None:
     """
-    DAG that executes a DBT project using Astronomer Cosmos' DbtTaskGroup.
+    Astronomer Cosmos example
     """
-    # Empty operator tasks
     pre_dbt = EmptyOperator(task_id="pre_dbt")
 
-    # DbtTaskGroup definition
     dbt_group = DbtTaskGroup(
         group_id="dbt_group",
         project_config=ProjectConfig(
             dbt_project_path=dbt_project_path,
-            manifest_path=f"{os.environ['AIRFLOW__COSMOS__DBT_DOCS_DIR']}/manifest.json",
+            manifest_path="/opt/airflow/dbt-docs/manifest.json",
             dbt_vars={
                 "start_time": "{{ params.start_time if params.start_time is not none else data_interval_start }}",
                 "end_time": "{{ params.end_time if params.end_time is not none else data_interval_end }}",
@@ -58,19 +57,24 @@ def dbt_simple_task_group() -> None:
             partial_parse=False,
         ),
         profile_config=profile_config,
+        operator_args={
+                "install_deps": True
+            },
         execution_config=ExecutionConfig(
             dbt_executable_path=f"{os.environ['AIRFLOW_HOME']}/dbt_venv/bin/dbt",
         ),
         render_config=RenderConfig(
             load_method=LoadMode.DBT_MANIFEST,
+            # select=["tag:jaffle_shop"],
+            # exclude=['path:seeds', 'config.materialized:view'],
             test_behavior=TestBehavior.AFTER_ALL,
-            dbt_deps=False,
+            dbt_deps=True,
         ),
     )
 
     post_dbt = EmptyOperator(task_id="post_dbt")
 
-    # Set the task dependencies
     pre_dbt >> dbt_group >> post_dbt
+
 
 dbt_simple_task_group()

@@ -1,7 +1,7 @@
 version: 2
 
 sources:
-  - name: airbnb_datawarehouse
+  - name: airflow
     schema: raw
     tables:
       - name: listings
